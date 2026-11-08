@@ -1,6 +1,6 @@
 // Troque o número da versão sempre que alterar algum arquivo do app,
 // para os aparelhos baixarem a versão nova.
-const CACHE = 'minha-estante-v2';
+const CACHE = 'minha-estante-v3';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {

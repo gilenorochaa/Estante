@@ -242,6 +242,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
 .coverrow .thumb { width: 48px; height: 68px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); }
 .coverrow .link { margin-left: 0; }
 .cover { width: 40px; height: 56px; object-fit: cover; border-radius: 3px; border: 1px solid var(--line); }
+.book.has-cover { grid-template-columns: 40px minmax(0, 1fr) auto; }
 .seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .seg button { min-height: 44px; border: 0; background: var(--field); font-weight: 500; }
 .seg button + button { border-left: 1px solid var(--line); }
@@ -336,6 +337,17 @@ form { display: flex; flex-direction: column; gap: 14px; }
       <h2 id="sheet-title" tabindex="-1">Novo livro</h2>
       <button type="button" id="close" class="icon" aria-label="Fechar">&times;</button>
     </div>
+    <div class="photos">
+      <button type="button" id="barcode-btn" class="btn">Fotografar o código de barras</button>
+      <div class="coverrow">
+        <button type="button" id="cover-btn" class="btn">Fotografar a capa</button>
+        <img id="cover-thumb" class="thumb" alt="Capa do livro" hidden>
+        <button type="button" id="cover-remove" class="link" hidden>Remover</button>
+      </div>
+      <input id="barcode-in" type="file" accept="image/*" capture="environment" hidden>
+      <input id="cover-in" type="file" accept="image/*" capture="environment" hidden>
+      <p id="photo-status" class="hint" role="status" aria-live="polite"></p>
+    </div>
     <div class="field">
       <label for="f-isbn">ISBN (opcional)</label>
       <div class="inline">
@@ -417,6 +429,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
   var editingId = null;
   var formStatus = 'quero';
   var formRating = 0;
+  var formCover = '';
   var opener = null;
   var delTimer = null;
   var toastTimer = null;
@@ -434,7 +447,9 @@ form { display: flex; flex-direction: column; gap: 14px; }
     save: $('save'), toast: $('toast'), sheetTitle: $('sheet-title'), genres: $('genres'),
     isbnFind: $('isbn-find'), isbnScan: $('isbn-scan'), isbnStatus: $('isbn-status'),
     scan: $('scan'), scanVideo: $('scan-video'),
-    shelfSel: $('shelf-filter'), shelfWrap: $('shelf-wrap'), shelves: $('shelves'), ret: $('return')
+    shelfSel: $('shelf-filter'), shelfWrap: $('shelf-wrap'), shelves: $('shelves'), ret: $('return'),
+    barcodeBtn: $('barcode-btn'), barcodeIn: $('barcode-in'), coverBtn: $('cover-btn'), coverIn: $('cover-in'),
+    coverThumb: $('cover-thumb'), coverRemove: $('cover-remove'), photoStatus: $('photo-status')
   };
 
   function esc(s) {
@@ -540,8 +555,9 @@ form { display: flex; flex-direction: column; gap: 14px; }
       stars = '<span class="stars" aria-label="Nota ' + b.rating + ' de 5">' +
         '★'.repeat(b.rating) + '<span class="off">' + '★'.repeat(5 - b.rating) + '</span></span>';
     }
-    return '<li><button type="button" class="book" data-id="' + esc(b.id) + '">' +
-      '<span class="spine" style="--h:' + h + '"></span>' +
+    var hasCover = typeof b.cover === 'string' && b.cover.indexOf('data:image/') === 0;
+    return '<li><button type="button" class="book' + (hasCover ? ' has-cover' : '') + '" data-id="' + esc(b.id) + '">' +
+      (hasCover ? '<img class="cover" alt="" src="' + esc(b.cover) + '">' : '<span class="spine" style="--h:' + h + '"></span>') +
       '<span class="b-main">' +
         '<span class="b-title">' + esc(b.title) + (b.exemplo ? '<span class="tag">exemplo</span>' : '') + '</span>' +
         (sub ? '<span class="b-sub">' + sub + '</span>' : '') +
@@ -668,11 +684,14 @@ form { display: flex; flex-direction: column; gap: 14px; }
     el.notes.value = book ? book.notes || '' : '';
     formStatus = book && STATUS[book.status] ? book.status : 'quero';
     formRating = book ? book.rating || 0 : 0;
+    formCover = book && typeof book.cover === 'string' ? book.cover : '';
     syncStatus();
     syncStars();
     fillGenres();
     fillShelves();
     syncReturn();
+    syncCover();
+    setPhotoStatus('');
     el.errTitle.hidden = true;
     setIsbnStatus('');
     el.del.hidden = !book;
@@ -783,6 +802,82 @@ form { display: flex; flex-direction: column; gap: 14px; }
     el.scan.hidden = true;
   }
 
+  /* ---------- Fotos: código de barras e capa ---------- */
+  function setPhotoStatus(msg, bad) {
+    el.photoStatus.textContent = msg;
+    el.photoStatus.className = 'hint' + (bad ? ' bad' : '');
+  }
+  function loadImage(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () { resolve({ img: img, url: url }); };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('imagem')); };
+      img.src = url;
+    });
+  }
+  function scaled(img, max, type, quality) {
+    var s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    var c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * s));
+    c.height = Math.max(1, Math.round(img.naturalHeight * s));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL(type, quality);
+  }
+  function syncCover() {
+    el.coverThumb.hidden = !formCover;
+    if (formCover) el.coverThumb.src = formCover; else el.coverThumb.removeAttribute('src');
+    el.coverRemove.hidden = !formCover;
+    el.coverBtn.textContent = formCover ? 'Trocar a capa' : 'Fotografar a capa';
+  }
+  async function readBarcodePhoto(file) {
+    if (!file) return;
+    if (typeof ZXing === 'undefined') {
+      setPhotoStatus('A leitura do código precisa de internet. Digite o ISBN.', true);
+      el.barcodeIn.value = '';
+      return;
+    }
+    el.barcodeBtn.disabled = true;
+    setPhotoStatus('Lendo o código…');
+    var loaded = null, reader = null;
+    try {
+      loaded = await loadImage(file);
+      var url = scaled(loaded.img, 1600, 'image/jpeg', 0.9);
+      reader = new ZXing.BrowserMultiFormatReader();
+      var result = await reader.decodeFromImageUrl(url);
+      var text = String(result.getText()).replace(/[^0-9Xx]/g, '');
+      if (/^97[89]\d{10}$/.test(text) || /^\d{9}[\dXx]$/.test(text)) {
+        el.isbn.value = text;
+        setPhotoStatus('');
+        await findIsbn();
+      } else {
+        setPhotoStatus('Li um código, mas não é de livro. Procure o que começa com 978 ou 979.', true);
+      }
+    } catch (e) {
+      setPhotoStatus('Não consegui ler o código. Chegue mais perto, com boa luz, e deixe o código reto na foto.', true);
+    } finally {
+      try { if (reader) reader.reset(); } catch (e) { /* segue */ }
+      if (loaded) URL.revokeObjectURL(loaded.url);
+      el.barcodeBtn.disabled = false;
+      el.barcodeIn.value = '';
+    }
+  }
+  async function takeCover(file) {
+    if (!file) return;
+    var loaded = null;
+    try {
+      loaded = await loadImage(file);
+      formCover = scaled(loaded.img, 240, 'image/jpeg', 0.7);
+      syncCover();
+      setPhotoStatus('Capa guardada. Toque em Salvar para manter.');
+    } catch (e) {
+      setPhotoStatus('Não consegui abrir essa foto. Tente tirar outra.', true);
+    } finally {
+      if (loaded) URL.revokeObjectURL(loaded.url);
+      el.coverIn.value = '';
+    }
+  }
+
   /* ---------- Backup, planilha e importação ---------- */
   function download(name, text, mime) {
     var blob = new Blob([text], { type: mime + ';charset=utf-8' });
@@ -836,6 +931,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     return {
       id: id, title: str(b.title), author: str(b.author), genre: str(b.genre), isbn: str(b.isbn),
       shelf: str(b.shelf), lentTo: str(b.lentTo), lentAt: str(b.lentTo) ? Number(b.lentAt) || 0 : 0,
+      cover: typeof b.cover === 'string' && b.cover.indexOf('data:image/') === 0 ? b.cover : '',
       notes: str(b.notes), status: status,
       rating: status === 'lido' ? rating : 0, addedAt: Number(b.addedAt) || Date.now(), exemplo: !!b.exemplo
     };
@@ -986,6 +1082,11 @@ form { display: flex; flex-direction: column; gap: 14px; }
   $('clear-demo').addEventListener('click', clearDemo);
   el.shelfSel.addEventListener('change', function () { state.shelf = el.shelfSel.value; render(); });
   el.lent.addEventListener('input', syncReturn);
+  el.barcodeBtn.addEventListener('click', function () { el.barcodeIn.click(); });
+  el.barcodeIn.addEventListener('change', function () { readBarcodePhoto(el.barcodeIn.files && el.barcodeIn.files[0]); });
+  el.coverBtn.addEventListener('click', function () { el.coverIn.click(); });
+  el.coverIn.addEventListener('change', function () { takeCover(el.coverIn.files && el.coverIn.files[0]); });
+  el.coverRemove.addEventListener('click', function () { formCover = ''; syncCover(); setPhotoStatus(''); });
   el.ret.addEventListener('click', function () {
     el.lent.value = '';
     syncReturn();
@@ -1050,6 +1151,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       shelf: el.shelf.value.trim(),
       lentTo: lentTo,
       lentAt: lentAt,
+      cover: formCover,
       notes: el.notes.value.trim(),
       status: formStatus,
       rating: formStatus === 'lido' ? formRating : 0,
